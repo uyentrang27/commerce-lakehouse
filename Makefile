@@ -30,11 +30,11 @@ benchmark:
 	$(PY) benchmark/benchmark_incremental.py
 
 scd2-demo:
-	$(PY) scripts/generate_data.py --mutate-dims --out data
+	$(PY) scripts/gen_multisource.py --mutate-dims --out data
 	$(PY) spark/silver_transform.py --data-dir data
 	$(DBT) snapshot --profiles-dir dbt --project-dir dbt
-	$(DBT) run --select dim_customer dim_product --profiles-dir dbt --project-dir dbt
-	@echo "Inspect gold.dim_customer / gold.dim_product for is_current=false history rows."
+	$(DBT) run --select dim_product --profiles-dir dbt --project-dir dbt
+	@echo "Inspect gold.dim_product for is_current=false history rows (price/grade changes)."
 
 airflow:
 	python3 -m venv .venv-airflow

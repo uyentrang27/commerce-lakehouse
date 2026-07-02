@@ -1,6 +1,6 @@
 -- Date spine covering the order window, generated from the fact date range.
 with bounds as (
-    select min(order_date) as mn, max(order_date) as mx from {{ ref('stg_orders') }}
+    select min(order_date) as mn, max(order_date) as mx from {{ ref('stg_sales') }}
 ),
 spine as (
     select unnest(generate_series(

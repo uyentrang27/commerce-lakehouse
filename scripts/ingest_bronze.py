@@ -16,7 +16,8 @@ import pathlib
 import duckdb
 
 ENTITIES = [
-    "marketplaces", "customers", "products", "orders", "order_items", "payments",
+    "sales_amazon", "sales_backmarket", "settlements_oms",
+    "ref_sku_map", "ref_fx", "ref_status_map", "ref_product",
 ]
 
 

@@ -35,7 +35,7 @@ def main() -> None:
     scale = ap.parse_args().scale
     (PROJECT / "warehouse").mkdir(exist_ok=True)
 
-    run("generate", PY, "scripts/generate_data.py", "--scale", str(scale), "--out", "data")
+    run("generate", PY, "scripts/gen_multisource.py", "--scale", str(scale), "--out", "data")
     run("bronze", PY, "scripts/ingest_bronze.py", "--data-dir", "data", "--db-path", DB)
     run("silver", PY, "spark/silver_transform.py", "--data-dir", "data")
     run("dbt snapshot", DBT, "snapshot", "--profiles-dir", DBT_DIR, "--project-dir", DBT_DIR)

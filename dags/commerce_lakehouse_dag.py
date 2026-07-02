@@ -63,7 +63,7 @@ with DAG(
     tags=["flagship", "lakehouse", "spark", "dbt", "medallion"],
 ) as dag:
 
-    generate = bash("generate", f"{PY} scripts/generate_data.py --scale {SCALE} --out data")
+    generate = bash("generate", f"{PY} scripts/gen_multisource.py --scale {SCALE} --out data")
     bronze = bash("bronze", f"{PY} scripts/ingest_bronze.py --data-dir data --db-path {DUCKDB_PATH}")
     silver = bash("silver", f"{PY} spark/silver_transform.py --data-dir data")
     dbt_snapshot = bash("dbt_snapshot", f"{DBT} snapshot --profiles-dir {DBT_DIR} --project-dir {DBT_DIR}")

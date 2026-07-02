@@ -1,23 +1,15 @@
 version: 2
 
 models:
-  - name: dim_marketplace
+  - name: dim_channel
     columns:
-      - name: marketplace_sk
+      - name: channel_sk
         data_tests: [unique, not_null]
-      - name: marketplace_id
-        data_tests: [not_null]
-
-  - name: dim_customer
-    description: "SCD Type 2 customer dimension (one row per version)."
-    columns:
-      - name: customer_sk
-        data_tests: [unique, not_null]
-      - name: customer_id
+      - name: channel
         data_tests: [not_null]
 
   - name: dim_product
-    description: "SCD Type 2 product dimension with price history."
+    description: "SCD Type 2 product dimension with price + grade history."
     columns:
       - name: product_sk
         data_tests: [unique, not_null]
@@ -29,48 +21,64 @@ models:
       - name: date_key
         data_tests: [unique, not_null]
 
-  - name: fct_orders
-    description: "Order-grain fact (incremental)."
+  - name: fct_sales
+    description: "Order-grain sales fact (incremental), conformed from both channels."
     columns:
       - name: order_id
         data_tests: [unique, not_null]
-      - name: marketplace_sk
+      - name: channel_sk
         data_tests:
           - not_null
           - relationships:
-              to: ref('dim_marketplace')
-              field: marketplace_sk
-      - name: net_revenue
+              to: ref('dim_channel')
+              field: channel_sk
+      - name: product_sk
+        data_tests:
+          - relationships:
+              to: ref('dim_product')
+              field: product_sk
+      - name: revenue_usd
         data_tests: [not_null]
 
-  - name: fct_order_items
-    description: "Order-item-grain fact (incremental)."
+  - name: fct_settlement
+    description: "Settlement-grain fact (incremental): cash remitted per order."
     columns:
-      - name: order_item_id
+      - name: settlement_id
         data_tests: [unique, not_null]
-      - name: quantity
+      - name: channel_sk
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_channel')
+              field: channel_sk
+
+  - name: mart_reconciliation
+    description: "Order-grain reconciliation: booked sales revenue vs cash remitted."
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: booked_usd
         data_tests: [not_null]
 
-  - name: agg_marketplace_daily
+  - name: agg_channel_daily
     columns:
-      - name: marketplace_name
+      - name: channel_name
         data_tests: [not_null]
       - name: order_date
         data_tests: [not_null]
 
 exposures:
-  - name: powerbi_marketplace_dashboard
+  - name: powerbi_reconciliation_dashboard
     type: dashboard
     maturity: medium
     description: >
       Power BI serving layer (import model + Deneb interactive visuals) built on
-      the Gold marts. Consumes fct_orders, agg_marketplace_daily and the
-      dimensions.
+      the Gold marts. Consumes agg_channel_daily and mart_reconciliation plus the
+      dimensions to show channel performance and sales-vs-cash reconciliation.
     depends_on:
-      - ref('fct_orders')
-      - ref('agg_marketplace_daily')
-      - ref('dim_marketplace')
-      - ref('dim_customer')
+      - ref('agg_channel_daily')
+      - ref('mart_reconciliation')
+      - ref('dim_channel')
       - ref('dim_product')
     owner:
       name: Trang Nguyen

@@ -1,6 +1,6 @@
-"""Benchmark: incremental refresh vs full rebuild of the Gold fact tables.
+"""Benchmark: incremental refresh vs full rebuild of the Gold sales fact.
 
-It appends one new day of orders to the Silver lake, then times:
+It appends one new day of sales to the Silver lake, then times:
   1. `dbt run` (incremental)  — processes ONLY the new day (delete+insert).
   2. `dbt run --full-refresh` — rebuilds the whole fact history.
 
@@ -43,94 +43,55 @@ def dbt(*args) -> float:
 
 
 def append_delta_day() -> tuple[str, int]:
-    """Synthesize one new day of orders + items into the Silver lake."""
+    """Synthesize one new day of sales into the Silver lake (one partition)."""
     con = duckdb.connect(DB, read_only=True)
-    max_date = con.execute("select max(order_date) from gold.fct_orders").fetchone()[0]
-    max_oid = con.execute("select max(order_id) from gold.fct_orders").fetchone()[0]
-    max_iid = con.execute("select max(order_item_id) from gold.fct_order_items").fetchone()[0]
-    n_cust = con.execute("select count(*) from gold.dim_customer where is_current").fetchone()[0]
-    mkts = con.execute(
-        "select marketplace_id, marketplace_name, channel_type, commission_rate from gold.dim_marketplace"
-    ).fetchall()
+    max_date = con.execute("select max(order_date) from gold.fct_sales").fetchone()[0]
     prods = con.execute(
-        "select product_id, category, brand, unit_cost from gold.dim_product where is_current"
+        "select product_id from gold.dim_product where is_current"
     ).fetchall()
     con.close()
+    prod_ids = np.array([p[0] for p in prods], dtype="int64")
 
     new_date = (date.fromisoformat(str(max_date)) + timedelta(days=1)).isoformat()
     rng = np.random.default_rng(7)
-    n = max(1000, n_cust // 2)  # delta ~ half the customer count in orders
+    n = max(1000, len(prod_ids) * 5)   # delta day of sales
 
-    oid = np.arange(max_oid + 1, max_oid + 1 + n, dtype="int64")
-    mk = [mkts[i] for i in rng.integers(0, len(mkts), n)]
-    mk_id = np.array([m[0] for m in mk], dtype="int32")
-    mk_name = np.array([m[1] for m in mk])
-    mk_chan = np.array([m[2] for m in mk])
-    mk_comm = np.array([m[3] for m in mk], dtype="float64")
-
-    # Silver orders partition (order_date encoded in the folder, not the file).
-    orders_tbl = {
-        "order_id": oid,
-        "customer_id": rng.integers(1, n_cust + 1, n),
-        "marketplace_id": mk_id,
-        "marketplace_name": mk_name,
-        "channel_type": mk_chan,
-        "commission_rate": mk_comm,
-        "order_status": np.array(["delivered"] * n),
-        "is_returned": np.zeros(n, dtype=bool),
-        "is_cancelled": np.zeros(n, dtype=bool),
-        "currency": np.array(["VND"] * n),
+    qty = rng.integers(1, 4, n).astype("int32")
+    price = np.round(rng.uniform(80, 1200, n), 2)
+    sales_tbl = {
+        "order_id": np.array([f"DLT-{new_date}-{i}" for i in range(n)]),
+        "source": np.array(["amazon"] * n),
+        "product_id": prod_ids[rng.integers(0, len(prod_ids), n)],
+        "quantity": qty,
+        "unit_price": price,
+        "canonical_status": np.array(["DELIVERED"] * n),
+        "revenue_usd": np.round(qty * price, 2),
     }
-    part = SILVER / "orders" / f"order_date={new_date}"
+    # order_date is encoded in the partition folder, not the file.
+    part = SILVER / "sales" / f"order_date={new_date}"
     part.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.table(orders_tbl), part / "delta.parquet")
-
-    # Silver order_items (1-3 items per new order).
-    items_per = rng.integers(1, 4, n)
-    total = int(items_per.sum())
-    iid = np.arange(max_iid + 1, max_iid + 1 + total, dtype="int64")
-    item_oid = np.repeat(oid, items_per)
-    pr = [prods[i] for i in rng.integers(0, len(prods), total)]
-    pr_id = np.array([p[0] for p in pr], dtype="int64")
-    pr_cat = np.array([p[1] for p in pr])
-    pr_brand = np.array([p[2] for p in pr])
-    pr_cost = np.array([p[3] for p in pr], dtype="float64")
-    qty = rng.integers(1, 5, total).astype("int32")
-    price = np.round(rng.uniform(20, 2000, total), 2)
-    disc = np.round(rng.choice([0, 0, 5, 10]) / 100.0, 2) * np.ones(total)
-    gross = np.round(qty * price, 2)
-    net = np.round(gross * (1 - disc), 2)
-    cost = np.round(qty * pr_cost, 2)
-    items_tbl = {
-        "order_item_id": iid, "order_id": item_oid, "product_id": pr_id,
-        "category": pr_cat, "brand": pr_brand, "quantity": qty,
-        "unit_price": price, "discount_pct": disc, "unit_cost": pr_cost,
-        "gross_amount": gross, "net_amount": net, "cost_amount": cost,
-        "margin_amount": np.round(net - cost, 2),
-    }
-    pq.write_table(pa.table(items_tbl), SILVER / "order_items" / "delta.parquet")
+    pq.write_table(pa.table(sales_tbl), part / "delta.parquet")
     return new_date, n
 
 
 def main() -> None:
     print("=== appending one delta day to Silver ===")
     new_date, n_new = append_delta_day()
-    print(f"delta: {n_new:,} new orders on {new_date}")
+    print(f"delta: {n_new:,} new sales on {new_date}")
 
-    fct = ["fct_orders", "fct_order_items"]
     print("\n=== INCREMENTAL run (process only the new day) ===")
-    t_incr = dbt("run", "--select", *fct)
+    t_incr = dbt("run", "--select", "fct_sales")
 
     con = duckdb.connect(DB, read_only=True)
-    total_orders = con.execute("select count(*) from gold.fct_orders").fetchone()[0]
+    total = con.execute("select count(*) from gold.fct_sales").fetchone()[0]
     con.close()
 
     print("\n=== FULL-REFRESH run (rebuild all history) ===")
-    t_full = dbt("run", "--full-refresh", "--select", *fct)
+    t_full = dbt("run", "--full-refresh", "--select", "fct_sales")
 
     print("\n================= RESULT =================")
-    print(f"fact rows (total):        {total_orders:,} orders")
-    print(f"delta processed:          {n_new:,} orders (1 day)")
+    print(f"fact rows (total):        {total:,} sales")
+    print(f"delta processed:          {n_new:,} sales (1 day)")
     print(f"incremental run:          {t_incr:6.2f}s")
     print(f"full-refresh run:         {t_full:6.2f}s")
     if t_incr > 0:
