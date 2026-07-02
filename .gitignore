@@ -1,0 +1,36 @@
+# venvs
+.venv/
+.venv-airflow/
+
+# generated data + warehouse (rebuilt by the pipeline)
+data/
+warehouse/
+*.duckdb
+*.duckdb.wal
+
+# dbt artifacts
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+
+# airflow runtime
+logs/
+airflow.db
+airflow.cfg
+airflow-webserver.pid
+webserver_config.py
+standalone_admin_password.txt
+*.pid
+
+# spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# python
+__pycache__/
+*.pyc
+
+# keep Power BI screenshots (docs/) but not the .pbix binary
+*.pbix

@@ -1,0 +1,76 @@
+version: 2
+
+models:
+  - name: dim_marketplace
+    columns:
+      - name: marketplace_sk
+        data_tests: [unique, not_null]
+      - name: marketplace_id
+        data_tests: [not_null]
+
+  - name: dim_customer
+    description: "SCD Type 2 customer dimension (one row per version)."
+    columns:
+      - name: customer_sk
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests: [not_null]
+
+  - name: dim_product
+    description: "SCD Type 2 product dimension with price history."
+    columns:
+      - name: product_sk
+        data_tests: [unique, not_null]
+      - name: product_id
+        data_tests: [not_null]
+
+  - name: dim_date
+    columns:
+      - name: date_key
+        data_tests: [unique, not_null]
+
+  - name: fct_orders
+    description: "Order-grain fact (incremental)."
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: marketplace_sk
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_marketplace')
+              field: marketplace_sk
+      - name: net_revenue
+        data_tests: [not_null]
+
+  - name: fct_order_items
+    description: "Order-item-grain fact (incremental)."
+    columns:
+      - name: order_item_id
+        data_tests: [unique, not_null]
+      - name: quantity
+        data_tests: [not_null]
+
+  - name: agg_marketplace_daily
+    columns:
+      - name: marketplace_name
+        data_tests: [not_null]
+      - name: order_date
+        data_tests: [not_null]
+
+exposures:
+  - name: powerbi_marketplace_dashboard
+    type: dashboard
+    maturity: medium
+    description: >
+      Power BI serving layer (import model + Deneb interactive visuals) built on
+      the Gold marts. Consumes fct_orders, agg_marketplace_daily and the
+      dimensions.
+    depends_on:
+      - ref('fct_orders')
+      - ref('agg_marketplace_daily')
+      - ref('dim_marketplace')
+      - ref('dim_customer')
+      - ref('dim_product')
+    owner:
+      name: Trang Nguyen
