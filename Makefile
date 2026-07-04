@@ -9,9 +9,11 @@ SCALE ?= 1000000
 EVENTS ?= 500
 RATE ?= 200
 STREAM_COMPOSE := docker compose -f docker-compose.streaming.yml
+SERVING_COMPOSE := docker compose -f docker-compose.serving.yml
 
 .PHONY: help install pipeline benchmark scd2-demo airflow clean \
-        stream-up stream-produce stream-consume stream-down stream-demo
+        stream-up stream-produce stream-consume stream-down stream-demo \
+        serving-up serving-load serving-down serving-demo
 
 help:
 	@echo "make install     - create .venv and install the data stack"
@@ -20,6 +22,7 @@ help:
 	@echo "make scd2-demo   - mutate dims + re-snapshot to show SCD Type 2 history"
 	@echo "make airflow     - install Airflow in .venv-airflow and launch standalone"
 	@echo "make stream-demo - start Kafka, produce order events, drain to Bronze, stop"
+	@echo "make serving-demo- start Postgres+Grafana, publish Gold marts (http://localhost:3000)"
 	@echo "make clean       - remove data/, warehouse/, dbt/target"
 
 install:
@@ -67,6 +70,21 @@ stream-down:
 
 stream-demo: stream-up stream-produce stream-consume
 	@echo "Streamed events landed in data/bronze_stream/orders. Run 'make stream-down' to stop Kafka."
+
+serving-up:
+	$(SERVING_COMPOSE) up -d
+	@echo "waiting for Postgres to become healthy..."
+	@until [ "$$(docker inspect -f '{{.State.Health.Status}}' commerce-postgres 2>/dev/null)" = "healthy" ]; do sleep 2; done
+	@echo "Postgres up (localhost:5432), Grafana at http://localhost:3000"
+
+serving-load:
+	$(PY) serving/load_to_postgres.py
+
+serving-down:
+	$(SERVING_COMPOSE) down -v
+
+serving-demo: serving-up serving-load
+	@echo "Serving marts published. Open http://localhost:3000 (anonymous viewer) -> 'Commerce Lakehouse — Serving'."
 
 clean:
 	rm -rf data warehouse dbt/target dbt/logs

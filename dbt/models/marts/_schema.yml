@@ -68,17 +68,17 @@ models:
         data_tests: [not_null]
 
 exposures:
-  - name: powerbi_reconciliation_dashboard
+  - name: grafana_reconciliation_dashboard
     type: dashboard
     maturity: medium
+    url: http://localhost:3000/d/commerce-lakehouse
     description: >
-      Power BI serving layer (import model + Deneb interactive visuals) built on
-      the Gold marts. Consumes agg_channel_daily and mart_reconciliation plus the
-      dimensions to show channel performance and sales-vs-cash reconciliation.
+      Grafana serving dashboard built on the Gold marts, published to a Postgres
+      serving DB. Consumes agg_channel_daily and mart_reconciliation to show
+      channel performance and sales-vs-cash reconciliation (booked, settled,
+      fees, uncollected). Provisioned as code under serving/grafana/.
     depends_on:
       - ref('agg_channel_daily')
       - ref('mart_reconciliation')
-      - ref('dim_channel')
-      - ref('dim_product')
     owner:
       name: Trang Nguyen

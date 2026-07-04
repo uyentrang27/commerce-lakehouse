@@ -1,7 +1,7 @@
 # Commerce Lakehouse — end-to-end medallion data platform
 
 [![CI](https://github.com/uyentrang27/commerce-lakehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/uyentrang27/commerce-lakehouse/actions/workflows/ci.yml)
-&nbsp;PySpark · dbt · DuckDB · Kafka · Spark Structured Streaming · Apache Airflow · Docker
+&nbsp;PySpark · dbt · DuckDB · Kafka · Spark Structured Streaming · Apache Airflow · Postgres · Grafana · Docker
 
 A medallion lakehouse for a multi-channel reseller: raw ingestion → **Bronze** →
 **Silver (PySpark)** → **Gold (dbt star schema)** → serving, orchestrated by
@@ -36,7 +36,7 @@ flowchart LR
     FCT["fct_sales · fct_settlement<br/>incremental delete+insert"]
     MRT["mart_reconciliation<br/>agg_channel_daily"]
   end
-  PBI["Serving<br/>Power BI import + Deneb"]
+  PBI["Serving<br/>Postgres + Grafana dashboards"]
 
   A --> BRZ
   B --> BRZ
@@ -97,7 +97,7 @@ settles cash through an order-management system. Nothing lines up out of the box
 | **Silver** | **PySpark** | **Conform** each source to one schema (rename, cast messy dates, map codes); **broadcast joins** against the tiny reference tables — sku map, status map, FX — so the million-row fact never shuffles; **FX to USD**; **`unionByName`** the two conformed sales channels; keep settlement separate (different grain); **cache** the reused frame; **`coalesce`** file-sizing; **partition by `order_date`** for pruning. |
 | **Gold** | **dbt** | **Star schema** (facts + conformed dims, surrogate keys); **SCD Type 2** snapshot (product price + grade history); **incremental** facts (`delete+insert`, only the delta); **`mart_reconciliation`** (booked vs settled); **aggregation table** for fast BI; tests + exposure + lineage. |
 | **Orchestration** | **Airflow** | Idempotent stages, retries with backoff, backfill-ready `@daily`, a **DQ gate** that fails the run before bad data reaches serving, and orchestrator/data-stack **env isolation**. |
-| **Serving** | **Power BI** | Import model on the Gold marts (fast refresh) + interactive Deneb visuals. *(built separately on Windows — see Serving.)* |
+| **Serving** | **Postgres + Grafana** | Gold marts published to a Postgres serving DB; Grafana dashboards (datasource + dashboard provisioned as code) show channel performance and sales-vs-cash reconciliation. All on Linux — see Serving. |
 
 ## Why joins happen at Silver (conform) vs Gold (model)
 
@@ -186,7 +186,7 @@ SCALE=1000000 docker compose run --rm pipeline  # full 1M-order run
 It runs generate → bronze → silver(Spark) → dbt snapshot/run/test → **validate**
 (the data-quality gate), and exits non-zero if any dbt test or DQ check fails.
 The Gold warehouse (DuckDB) and Silver Parquet persist in named volumes for
-inspection or Power BI.
+inspection or the serving layer.
 
 ### With a local venv (fastest for iterating)
 ```bash
@@ -207,16 +207,36 @@ deployment enforces.
 
 ## Continuous integration
 Every push runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
-- **lint** — `ruff` over `scripts/`, `spark/`, `benchmark/`, `dags/`.
+- **lint** — `ruff` over `scripts/`, `spark/`, `benchmark/`, `dags/`, `streaming/`, `serving/`.
 - **pipeline** — provisions Java 17 + Python 3.12, then runs the full medallion
   pipeline at a small scale including **all 23 dbt tests** and the **DQ gate**.
   A broken transform or a failing quality check turns the build red.
 
-## Serving (Power BI)
-The Gold marts (`agg_channel_daily`, `mart_reconciliation`, dimensions) are the
-source for a Power BI import model with an interactive Deneb (Vega) report. The
-`dbt` `exposure` `powerbi_reconciliation_dashboard` records that dependency in the
-lineage. *(Built on Windows / Power BI Desktop; screenshots under `docs/`.)*
+## Serving (Postgres + Grafana)
+The Gold marts are published to a **Postgres serving DB**, which **Grafana** reads
+natively — the datasource and dashboard are **provisioned as code** under
+`serving/grafana/`, so the serving layer stands up reproducibly on Linux (no
+Power BI / Windows needed).
+
+```bash
+make serving-demo   # Postgres + Grafana (Docker) + publish Gold marts
+# open http://localhost:3000  (anonymous viewer) → "Commerce Lakehouse — Serving"
+make serving-down
+```
+
+![Grafana serving dashboard](docs/serving_grafana.png)
+
+The dashboard (`serving/grafana/dashboards/commerce_lakehouse.json`) shows, from
+`agg_channel_daily` and `mart_reconciliation`:
+- the **reconciliation waterfall** — booked revenue → marketplace fees → FX drift
+  → settled cash (stat panels);
+- **daily booked revenue** and **orders by channel** (time series);
+- **return rate %** by channel.
+
+`serving/load_to_postgres.py` does the publish: it attaches the DuckDB warehouse
+read-only and Postgres as the write target (DuckDB's `postgres` extension), then
+replaces each serving table. The dbt `exposure` `grafana_reconciliation_dashboard`
+records the dependency in the lineage.
 
 ## Project layout
 ```
@@ -231,13 +251,17 @@ commerce-lakehouse/
 ├── streaming/                 # Kafka producer + Spark Structured Streaming → Bronze
 │   ├── produce_orders.py      #   live order-event producer (kafka-python)
 │   └── stream_to_bronze.py    #   readStream Kafka → parse → checkpointed Parquet
+├── serving/                   # Postgres serving DB + Grafana (provisioned as code)
+│   ├── load_to_postgres.py    #   publish Gold marts DuckDB → Postgres
+│   └── grafana/               #   datasource + dashboard provisioning
 ├── dags/commerce_lakehouse_dag.py  # Airflow orchestration
 ├── benchmark/benchmark_incremental.py
 ├── Dockerfile · docker-compose.yml # reproducible data-stack image + one-command run
 ├── docker-compose.streaming.yml    # single-node Kafka (KRaft) for the streaming lane
+├── docker-compose.serving.yml      # Postgres + Grafana for the serving lane
 ├── .github/workflows/ci.yml   # lint + full-pipeline CI (dbt tests + DQ gate)
 ├── Makefile · ruff.toml        # task runner + lint config
-└── docs/                      # Power BI screenshots
+└── docs/                      # serving dashboard screenshot
 ```
 
 ## Engineering decisions & challenges

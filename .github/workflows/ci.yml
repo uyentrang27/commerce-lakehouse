@@ -21,7 +21,7 @@ jobs:
       - name: Install ruff
         run: pip install ruff
       - name: ruff check
-        run: ruff check scripts spark benchmark dags streaming
+        run: ruff check scripts spark benchmark dags streaming serving
 
   pipeline:
     runs-on: ubuntu-latest

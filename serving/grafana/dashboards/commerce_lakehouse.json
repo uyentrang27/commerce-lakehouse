@@ -1,0 +1,105 @@
+{
+  "uid": "commerce-lakehouse",
+  "title": "Commerce Lakehouse — Serving",
+  "tags": ["commerce", "lakehouse", "reconciliation"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "",
+  "time": { "from": "now-180d", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Booked revenue (USD)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        { "refId": "A", "format": "table", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT sum(booked_usd) AS booked FROM serving.mart_reconciliation" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Settled cash (USD)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        { "refId": "A", "format": "table", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT sum(net_received_usd) AS settled FROM serving.mart_reconciliation WHERE is_settled" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Marketplace fees (USD)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "orange" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        { "refId": "A", "format": "table", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT sum(fees_usd) AS fees FROM serving.mart_reconciliation WHERE is_settled" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "FX drift / residual (USD)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "red" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        { "refId": "A", "format": "table", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT sum(gap_usd) AS fx_drift FROM serving.mart_reconciliation" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Daily booked revenue by channel (USD)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "format": "time_series", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT order_date::timestamp AS time, channel_name AS metric, booked_usd AS value FROM serving.agg_channel_daily ORDER BY order_date" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Daily orders by channel",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "format": "time_series", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT order_date::timestamp AS time, channel_name AS metric, orders AS value FROM serving.agg_channel_daily ORDER BY order_date" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Return rate % by channel",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 12 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "percent", "custom": { "drawStyle": "line", "fillOpacity": 5 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "format": "time_series", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT order_date::timestamp AS time, channel_name AS metric, return_rate_pct AS value FROM serving.agg_channel_daily ORDER BY order_date" }
+      ]
+    }
+  ]
+}
