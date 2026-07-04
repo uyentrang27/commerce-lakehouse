@@ -34,8 +34,12 @@ DUCKDB_PATH = os.path.join(PROJECT, "warehouse", "lakehouse.duckdb")
 SILVER_PATH = os.path.join(PROJECT, "data", "silver")
 SCALE = os.environ.get("FLAGSHIP_SCALE", "1000000")
 
-ENV = {
-    **os.environ,
+# Only the two vars the pipeline needs. Do NOT merge os.environ here: `env` is a
+# templated field and BashOperator.template_ext=('.sh','.bash'), so any env value
+# ending in .sh (e.g. VS Code sets GIT_ASKPASS=.../askpass.sh) is treated as a
+# template file to load -> TemplateNotFound. append_env=True (below) merges these
+# into the real process env at runtime, keeping PATH/JAVA_HOME intact.
+EXTRA_ENV = {
     "DUCKDB_PATH": DUCKDB_PATH,
     "SILVER_PATH": SILVER_PATH,
 }
@@ -49,7 +53,10 @@ default_args = {
 
 
 def bash(task_id, cmd):
-    return BashOperator(task_id=task_id, bash_command=cmd, env=ENV, cwd=PROJECT)
+    return BashOperator(
+        task_id=task_id, bash_command=cmd,
+        env=EXTRA_ENV, append_env=True, cwd=PROJECT,
+    )
 
 
 with DAG(
