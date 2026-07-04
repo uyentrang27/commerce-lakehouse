@@ -44,6 +44,7 @@ flowchart LR
   R --> BRZ
   KFK --> SSS
   SSS --> BRZ
+  SSS -.live 1-min agg.-> PBI
   BRZ --> SIL
   SIL --> DIM
   SIL --> FCT
@@ -143,6 +144,32 @@ produced **300** more → re-ran the same job → Bronze holds **800**, of which
 **800 are distinct `event_id`** — the checkpoint skipped the already-committed
 500, no duplicates.
 
+### Real-time serving path (streaming → Postgres → Grafana)
+`stream_to_bronze.py` lands raw events for later conforming; `stream_to_serving.py`
+keeps a **live per-minute aggregate** for a real-time ops dashboard:
+
+```bash
+make realtime-demo   # Kafka + Grafana; stream order events → live per-minute dashboard
+# open http://localhost:3000 → "Commerce Lakehouse — Real-time orders" (auto-refresh 5s)
+```
+
+![Grafana real-time orders dashboard](docs/serving_realtime.png)
+
+- **Event-time window + watermark** — `window(event_ts, '1 minute')` with a
+  watermark, so late events land in the correct minute and state stays bounded.
+- **`foreachBatch` → Postgres upsert** — each micro-batch upserts its updated
+  windows (`INSERT … ON CONFLICT (window_start, channel)`), so re-runs and late
+  events correct a bucket instead of duplicating it (verified: 1,200 events →
+  22 window rows summing to exactly 1,200 orders).
+- **Postgres is the real-time sink, not DuckDB** — DuckDB is single-writer, so
+  concurrent stream-write + dashboard-read would block; Postgres serves both.
+- **Volume metrics only** (orders, units) — the stream is *raw* Bronze, before
+  Silver's FX conform, so summing mixed-currency revenue here would be wrong;
+  conformed revenue stays a batch (Gold) concern.
+
+Honest latency: micro-batch trigger (~5 s) + Grafana refresh (~5 s) ≈
+**near-real-time**, not sub-second.
+
 ## Data model (Gold star schema)
 ```mermaid
 erDiagram
@@ -238,6 +265,11 @@ read-only and Postgres as the write target (DuckDB's `postgres` extension), then
 replaces each serving table. The dbt `exposure` `grafana_reconciliation_dashboard`
 records the dependency in the lineage.
 
+Two dashboards, two speeds: this **batch reconciliation** dashboard, plus the
+**real-time orders** dashboard fed by the streaming lane (see *Real-time serving
+path* above) — the batch/streaming split rendered end to end on the same Postgres
+serving DB.
+
 ## Project layout
 ```
 commerce-lakehouse/
@@ -250,10 +282,11 @@ commerce-lakehouse/
 ├── dbt/                       # Gold: staging → snapshot (SCD2) → marts (star, incremental, reconciliation)
 ├── streaming/                 # Kafka producer + Spark Structured Streaming → Bronze
 │   ├── produce_orders.py      #   live order-event producer (kafka-python)
-│   └── stream_to_bronze.py    #   readStream Kafka → parse → checkpointed Parquet
+│   ├── stream_to_bronze.py    #   readStream Kafka → parse → checkpointed Parquet
+│   └── stream_to_serving.py   #   windowed agg → Postgres → real-time Grafana
 ├── serving/                   # Postgres serving DB + Grafana (provisioned as code)
 │   ├── load_to_postgres.py    #   publish Gold marts DuckDB → Postgres
-│   └── grafana/               #   datasource + dashboard provisioning
+│   └── grafana/               #   datasource + batch & real-time dashboards
 ├── dags/commerce_lakehouse_dag.py  # Airflow orchestration
 ├── benchmark/benchmark_incremental.py
 ├── Dockerfile · docker-compose.yml # reproducible data-stack image + one-command run

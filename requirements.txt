@@ -6,4 +6,5 @@ pyarrow>=15.0
 duckdb>=1.0
 dbt-duckdb>=1.7
 pyspark>=3.5
-kafka-python>=2.1  # streaming lane: producer client (see streaming/)
+kafka-python>=2.1        # streaming lane: producer client (see streaming/)
+psycopg2-binary>=2.9     # streaming -> Postgres serving sink + serving loader

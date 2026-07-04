@@ -13,7 +13,8 @@ SERVING_COMPOSE := docker compose -f docker-compose.serving.yml
 
 .PHONY: help install pipeline benchmark scd2-demo airflow clean \
         stream-up stream-produce stream-consume stream-down stream-demo \
-        serving-up serving-load serving-down serving-demo
+        serving-up serving-load serving-down serving-demo \
+        stream-serving realtime-demo
 
 help:
 	@echo "make install     - create .venv and install the data stack"
@@ -23,6 +24,7 @@ help:
 	@echo "make airflow     - install Airflow in .venv-airflow and launch standalone"
 	@echo "make stream-demo - start Kafka, produce order events, drain to Bronze, stop"
 	@echo "make serving-demo- start Postgres+Grafana, publish Gold marts (http://localhost:3000)"
+	@echo "make realtime-demo- Kafka+Grafana: stream order events -> live per-minute dashboard"
 	@echo "make clean       - remove data/, warehouse/, dbt/target"
 
 install:
@@ -85,6 +87,14 @@ serving-down:
 
 serving-demo: serving-up serving-load
 	@echo "Serving marts published. Open http://localhost:3000 (anonymous viewer) -> 'Commerce Lakehouse — Serving'."
+
+stream-serving:
+	$(PY) streaming/stream_to_serving.py --mode batch
+
+realtime-demo: stream-up serving-up
+	$(PY) streaming/produce_orders.py --count $(EVENTS) --rate $(RATE) --spread-minutes 10
+	$(PY) streaming/stream_to_serving.py --mode batch
+	@echo "Live per-minute aggregate in Postgres. Open http://localhost:3000 -> 'Commerce Lakehouse — Real-time orders'."
 
 clean:
 	rm -rf data warehouse dbt/target dbt/logs

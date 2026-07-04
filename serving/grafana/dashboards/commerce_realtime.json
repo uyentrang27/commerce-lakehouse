@@ -1,0 +1,66 @@
+{
+  "uid": "commerce-realtime",
+  "title": "Commerce Lakehouse — Real-time orders",
+  "tags": ["commerce", "lakehouse", "streaming", "realtime"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Orders (last 15m)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+      "targets": [
+        { "refId": "A", "format": "table", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT sum(orders) AS orders FROM serving.orders_stream_1m WHERE window_start > now() - interval '15 minutes'" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Units (last 15m)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+      "targets": [
+        { "refId": "A", "format": "table", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT sum(units) AS units FROM serving.orders_stream_1m WHERE window_start > now() - interval '15 minutes'" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Orders / minute by channel  (streaming, event-time windows)",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 40, "lineWidth": 1 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "format": "time_series", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT window_start AS time, channel AS metric, orders AS value FROM serving.orders_stream_1m ORDER BY window_start" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Units / minute by channel",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "postgres", "uid": "commerce-pg" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "format": "time_series", "rawQuery": true, "datasource": { "type": "postgres", "uid": "commerce-pg" },
+          "rawSql": "SELECT window_start AS time, channel AS metric, units AS value FROM serving.orders_stream_1m ORDER BY window_start" }
+      ]
+    }
+  ]
+}
