@@ -6,8 +6,12 @@ export DUCKDB_PATH := $(PROJECT)/warehouse/lakehouse.duckdb
 export SILVER_PATH := $(PROJECT)/data/silver
 
 SCALE ?= 1000000
+EVENTS ?= 500
+RATE ?= 200
+STREAM_COMPOSE := docker compose -f docker-compose.streaming.yml
 
-.PHONY: help install pipeline benchmark scd2-demo airflow clean
+.PHONY: help install pipeline benchmark scd2-demo airflow clean \
+        stream-up stream-produce stream-consume stream-down stream-demo
 
 help:
 	@echo "make install     - create .venv and install the data stack"
@@ -15,6 +19,7 @@ help:
 	@echo "make benchmark   - incremental vs full-refresh timing"
 	@echo "make scd2-demo   - mutate dims + re-snapshot to show SCD Type 2 history"
 	@echo "make airflow     - install Airflow in .venv-airflow and launch standalone"
+	@echo "make stream-demo - start Kafka, produce order events, drain to Bronze, stop"
 	@echo "make clean       - remove data/, warehouse/, dbt/target"
 
 install:
@@ -44,6 +49,24 @@ airflow:
 	AIRFLOW_HOME=$(PROJECT) AIRFLOW__CORE__DAGS_FOLDER=$(PROJECT)/dags \
 		AIRFLOW__CORE__LOAD_EXAMPLES=False FLAGSHIP_HOME=$(PROJECT) \
 		.venv-airflow/bin/airflow standalone
+
+stream-up:
+	$(STREAM_COMPOSE) up -d
+	@echo "waiting for Kafka to become healthy..."
+	@until [ "$$(docker inspect -f '{{.State.Health.Status}}' commerce-kafka 2>/dev/null)" = "healthy" ]; do sleep 2; done
+	@echo "Kafka is up on localhost:9092"
+
+stream-produce:
+	$(PY) streaming/produce_orders.py --count $(EVENTS) --rate $(RATE)
+
+stream-consume:
+	$(PY) streaming/stream_to_bronze.py --mode batch
+
+stream-down:
+	$(STREAM_COMPOSE) down
+
+stream-demo: stream-up stream-produce stream-consume
+	@echo "Streamed events landed in data/bronze_stream/orders. Run 'make stream-down' to stop Kafka."
 
 clean:
 	rm -rf data warehouse dbt/target dbt/logs

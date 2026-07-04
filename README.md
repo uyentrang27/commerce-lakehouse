@@ -1,15 +1,17 @@
 # Commerce Lakehouse — end-to-end medallion data platform
 
 [![CI](https://github.com/uyentrang27/commerce-lakehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/uyentrang27/commerce-lakehouse/actions/workflows/ci.yml)
-&nbsp;PySpark · dbt · DuckDB · Apache Airflow · Docker
+&nbsp;PySpark · dbt · DuckDB · Kafka · Spark Structured Streaming · Apache Airflow · Docker
 
 A medallion lakehouse for a multi-channel reseller: raw ingestion → **Bronze** →
 **Silver (PySpark)** → **Gold (dbt star schema)** → serving, orchestrated by
-**Apache Airflow**. Its centre of gravity is the hard part of real commerce data:
+**Apache Airflow**, with a **Kafka → Spark Structured Streaming** lane landing
+live order events into the same Bronze zone — *one lakehouse, two ingestion
+speeds*. Its centre of gravity is the hard part of real commerce data:
 **conforming several sources that speak different languages**, and **reconciling
 booked sales revenue against the cash actually settled**. It covers dimensional
 modelling, SCD Type 2, incremental processing, join/partition optimisation,
-data-quality gates and idempotent orchestration end to end.
+data-quality gates, streaming ingestion and idempotent orchestration end to end.
 
 ```mermaid
 flowchart LR
@@ -19,8 +21,12 @@ flowchart LR
     S["Settlement OMS<br/>cash net of fees · epoch date"]
     R["Reference<br/>sku map · FX · status map"]
   end
-  subgraph BR["Bronze — DuckDB"]
-    BRZ["Raw landed<br/>CREATE OR REPLACE + _loaded_at"]
+  subgraph STRM["Streaming lane"]
+    KFK["Kafka topic: orders<br/>live order events (JSON)"]
+    SSS["Spark Structured Streaming<br/>checkpoint · exactly-once · micro-batch"]
+  end
+  subgraph BR["Bronze"]
+    BRZ["Batch: DuckDB CREATE OR REPLACE + _loaded_at<br/>Stream: append Parquet, partitioned"]
   end
   subgraph SV["Silver — PySpark"]
     SIL["Conform + broadcast-join refs → USD<br/>unionByName sales · settlement kept separate<br/>partitioned Parquet"]
@@ -36,6 +42,8 @@ flowchart LR
   B --> BRZ
   S --> BRZ
   R --> BRZ
+  KFK --> SSS
+  SSS --> BRZ
   BRZ --> SIL
   SIL --> DIM
   SIL --> FCT
@@ -101,6 +109,39 @@ settles cash through an order-management system. Nothing lines up out of the box
   clean tables.
 - **Gold joins to *model*** — the star schema (surrogate keys, SCD2) and the
   order-level reconciliation between the two facts.
+
+## Streaming lane (Kafka → Spark Structured Streaming → Bronze)
+The batch lane loads marketplace exports on a schedule. The streaming lane models
+the *same domain* arriving live: a producer emits one JSON event per order onto a
+Kafka topic, and a **Spark Structured Streaming** job lands them into the **same
+Bronze zone** as append-partitioned Parquet. One lakehouse, two ingestion speeds;
+the streamed events are the same shape Silver already conforms.
+
+```bash
+make stream-demo        # start Kafka (Docker) → produce 500 events → drain to Bronze → done
+# or step by step:
+make stream-up          # single-node Kafka (KRaft) on localhost:9092
+make stream-produce EVENTS=500 RATE=200
+make stream-consume     # Spark drains the topic into data/bronze_stream/orders
+make stream-down
+```
+
+What it demonstrates:
+- **`readStream` from Kafka** → parse the JSON payload against an explicit schema,
+  keep Kafka `partition`/`offset` as lineage, stamp `_ingested_at`, partition by
+  `event_date`.
+- **Checkpointing = fault tolerance + exactly-once to the file sink.** The
+  checkpoint records the Kafka offsets already committed, so a restart resumes
+  where it stopped and a re-run processes only new offsets.
+- **Micro-batch, honestly.** Structured Streaming is micro-batch. `--mode batch`
+  uses the `availableNow` trigger (drain everything on the topic, then stop) —
+  deterministic and CI-friendly; `--mode continuous` runs on a fixed interval
+  like a real deployment.
+
+Verified idempotency: produced **500** events → drained → Bronze holds 500;
+produced **300** more → re-ran the same job → Bronze holds **800**, of which
+**800 are distinct `event_id`** — the checkpoint skipped the already-committed
+500, no duplicates.
 
 ## Data model (Gold star schema)
 ```mermaid
@@ -187,9 +228,13 @@ commerce-lakehouse/
 │   └── run_pipeline.py       # run all stages without Airflow
 ├── spark/silver_transform.py # PySpark conform + union + settlement (broadcast, FX, partition)
 ├── dbt/                       # Gold: staging → snapshot (SCD2) → marts (star, incremental, reconciliation)
+├── streaming/                 # Kafka producer + Spark Structured Streaming → Bronze
+│   ├── produce_orders.py      #   live order-event producer (kafka-python)
+│   └── stream_to_bronze.py    #   readStream Kafka → parse → checkpointed Parquet
 ├── dags/commerce_lakehouse_dag.py  # Airflow orchestration
 ├── benchmark/benchmark_incremental.py
 ├── Dockerfile · docker-compose.yml # reproducible data-stack image + one-command run
+├── docker-compose.streaming.yml    # single-node Kafka (KRaft) for the streaming lane
 ├── .github/workflows/ci.yml   # lint + full-pipeline CI (dbt tests + DQ gate)
 ├── Makefile · ruff.toml        # task runner + lint config
 └── docs/                      # Power BI screenshots
@@ -228,6 +273,10 @@ The interesting parts weren't the happy path — they were these calls:
 - **Coalesce + partition-by-date on write.** Silver `coalesce`s before writing to
   avoid the small-files problem and partitions by `order_date` so downstream reads
   prune to the days they need.
+- **Streaming reuses Bronze, not a parallel universe.** The Kafka lane lands into
+  the same Bronze zone rather than a separate pipeline, so batch and stream
+  converge at Silver. Exactly-once comes from the Structured Streaming checkpoint
+  (offset tracking + file-sink manifest), not hand-rolled dedup.
 
 ## Scaling to production
 The pattern is warehouse-portable. Swap targets without touching the DAG:
