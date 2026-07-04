@@ -1,0 +1,35 @@
+# Never copy host venvs (Linux-specific paths, hundreds of MB) into the image
+.venv/
+.venv-airflow/
+
+# Generated data + warehouse — rebuilt inside the container by the pipeline
+data/
+warehouse/
+*.duckdb
+*.duckdb.wal
+
+# Build/runtime artifacts
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+dbt/.user.yml
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Airflow runtime
+logs/
+airflow.db
+airflow.cfg
+*.pid
+standalone_admin_password.txt
+webserver_config.py
+
+# Spark local metastore
+spark-warehouse/
+metastore_db/
+derby.log
+
+# VCS / tooling
+.git/
+.gitignore

@@ -1,0 +1,10 @@
+# Lint config for the data stack. Enforced in CI (see .github/workflows/ci.yml).
+target-version = "py312"
+line-length = 100
+
+[lint]
+# Real-bug + hygiene rules: pycodestyle errors/warnings, pyflakes, import
+# sorting, pyupgrade, bugbear, comprehensions. Style-only line length is left
+# off so dense vectorised data code stays readable.
+select = ["E", "W", "F", "I", "UP", "B", "C4"]
+ignore = ["E501"]  # long lines allowed in data-generation / SQL-heavy code

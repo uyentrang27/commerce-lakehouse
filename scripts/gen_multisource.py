@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import numpy as np
 import pyarrow as pa
@@ -128,9 +128,13 @@ def gen_fx(days: int):
 def gen_status_map():
     ch, raw, canon = [], [], []
     for k, v in AMZ_STATUS.items():
-        ch.append("amazon"); raw.append(k); canon.append(v)
+        ch.append("amazon")
+        raw.append(k)
+        canon.append(v)
     for k, v in BM_STATUS.items():
-        ch.append("backmarket"); raw.append(k); canon.append(v)
+        ch.append("backmarket")
+        raw.append(k)
+        canon.append(v)
     write({"channel": ch, "raw_status": raw, "canonical_status": canon},
           RAW / "ref_status_map.parquet")
     print(f"[gen] ref_status_map: {len(ch)}")
@@ -220,11 +224,16 @@ def gen_settlements(rng, amz_ids, amz_canon, amz_gross, bm_ids, bm_canon,
         nt = np.round(g - mf - sf, 2)
         off = rng.integers(2, days + 5, n)
         pay = [int(datetime.combine(end - timedelta(days=int(o)),
-                                    datetime.min.time(), tzinfo=timezone.utc)
+                                    datetime.min.time(), tzinfo=UTC)
                    .timestamp()) for o in off]
-        rows_ref.extend(ids[idx]); rows_ch.extend([channel] * n)
-        gross.extend(g); mkt_fee.extend(mf); ship_fee.extend(sf); net.extend(nt)
-        cur.extend([currency] * n); payout.extend(pay)
+        rows_ref.extend(ids[idx])
+        rows_ch.extend([channel] * n)
+        gross.extend(g)
+        mkt_fee.extend(mf)
+        ship_fee.extend(sf)
+        net.extend(nt)
+        cur.extend([currency] * n)
+        payout.extend(pay)
 
     settle(amz_ids, amz_canon, amz_gross, "amazon", "USD", 0.15)
     settle(bm_ids, bm_canon, bm_gross, "backmarket", "EUR", 0.12)

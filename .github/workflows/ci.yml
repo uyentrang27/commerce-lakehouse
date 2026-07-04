@@ -1,0 +1,47 @@
+name: CI
+
+# Lint the data stack, then run the whole medallion pipeline end to end on a
+# small synthetic scale — including dbt tests and the data-quality gate — so a
+# broken transform or a failing DQ check turns the build red.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: ruff check
+        run: ruff check scripts spark benchmark dags
+
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # PySpark 3.5 runs on a JDK; Temurin 17 is the officially supported combo.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install the data stack (.venv)
+        run: make install
+
+      - name: Run pipeline (generate -> bronze -> silver -> dbt snapshot/run/test -> validate)
+        run: make pipeline SCALE=50000

@@ -1,0 +1,22 @@
+# Reproducible run of the whole medallion pipeline in one container.
+#
+#   docker compose run --rm pipeline                 # default SCALE (200k)
+#   SCALE=1000000 docker compose run --rm pipeline    # full 1M-order run
+#
+# The Gold warehouse (DuckDB) and the raw/Silver data land in named volumes so
+# you can inspect them after the run, or point Power BI / DuckDB at them.
+services:
+  pipeline:
+    build: .
+    image: commerce-lakehouse:latest
+    environment:
+      DUCKDB_PATH: /app/warehouse/lakehouse.duckdb
+      SILVER_PATH: /app/data/silver
+    command: ["python", "scripts/run_pipeline.py", "--scale", "${SCALE:-200000}"]
+    volumes:
+      - warehouse:/app/warehouse
+      - data:/app/data
+
+volumes:
+  warehouse:
+  data:

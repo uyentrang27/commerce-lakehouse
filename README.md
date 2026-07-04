@@ -1,5 +1,8 @@
 # Commerce Lakehouse — end-to-end medallion data platform
 
+[![CI](https://github.com/uyentrang27/commerce-lakehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/uyentrang27/commerce-lakehouse/actions/workflows/ci.yml)
+&nbsp;PySpark · dbt · DuckDB · Apache Airflow · Docker
+
 A medallion lakehouse for a multi-channel reseller: raw ingestion → **Bronze** →
 **Silver (PySpark)** → **Gold (dbt star schema)** → serving, orchestrated by
 **Apache Airflow**. Its centre of gravity is the hard part of real commerce data:
@@ -8,14 +11,40 @@ booked sales revenue against the cash actually settled**. It covers dimensional
 modelling, SCD Type 2, incremental processing, join/partition optimisation,
 data-quality gates and idempotent orchestration end to end.
 
-```
- SOURCES                       BRONZE        SILVER (Spark)          GOLD (dbt)              SERVING
- 2 sales channels (different   raw landed    conform → UNION sales   star schema            Power BI
-   schema/status/ccy/date)     in DuckDB     conform settlement      SCD2 dim_product        (import model
- 1 settlement system        ─► + audited  ─► (separate grain)     ─► fct_sales/settlement ─► + Deneb visuals)
- + reference tables                          broadcast joins, FX     mart_reconciliation
-   (sku map, FX, status)                     partitioned Parquet     agg tables
-        └───────────────── Apache Airflow: idempotent · retries · backfill · DQ gate ──────────────┘
+```mermaid
+flowchart LR
+  subgraph SRC["Sources"]
+    A["Amazon sales<br/>USD · str status · YYYY/MM/DD"]
+    B["BackMarket sales<br/>EUR · int status · DD-MM-YYYY"]
+    S["Settlement OMS<br/>cash net of fees · epoch date"]
+    R["Reference<br/>sku map · FX · status map"]
+  end
+  subgraph BR["Bronze — DuckDB"]
+    BRZ["Raw landed<br/>CREATE OR REPLACE + _loaded_at"]
+  end
+  subgraph SV["Silver — PySpark"]
+    SIL["Conform + broadcast-join refs → USD<br/>unionByName sales · settlement kept separate<br/>partitioned Parquet"]
+  end
+  subgraph GD["Gold — dbt"]
+    DIM["dim_product (SCD2)<br/>dim_channel · dim_date"]
+    FCT["fct_sales · fct_settlement<br/>incremental delete+insert"]
+    MRT["mart_reconciliation<br/>agg_channel_daily"]
+  end
+  PBI["Serving<br/>Power BI import + Deneb"]
+
+  A --> BRZ
+  B --> BRZ
+  S --> BRZ
+  R --> BRZ
+  BRZ --> SIL
+  SIL --> DIM
+  SIL --> FCT
+  DIM --> MRT
+  FCT --> MRT
+  MRT --> PBI
+  AF["Airflow — idempotent · retries · backfill · DQ gate"] -.orchestrates.-> BRZ
+  AF -.-> SIL
+  AF -.-> FCT
 ```
 
 > **Scale:** runs on **1,000,000 sales** (≈78% one channel — a deliberate skew)
@@ -74,15 +103,14 @@ settles cash through an order-management system. Nothing lines up out of the box
   order-level reconciliation between the two facts.
 
 ## Data model (Gold star schema)
-```
-                  dim_date
-                     │
- dim_channel ──┬── fct_sales ──── dim_product (SCD2)
-               │        │
-               └── fct_settlement
-                        │
-                mart_reconciliation   (fct_sales ⋈ fct_settlement by order)
-                agg_channel_daily     (pre-aggregated serving table)
+```mermaid
+erDiagram
+    dim_date       ||--o{ fct_sales : order_date
+    dim_channel    ||--o{ fct_sales : channel_sk
+    dim_product    ||--o{ fct_sales : "product_sk (SCD2)"
+    dim_channel    ||--o{ fct_settlement : channel_sk
+    fct_sales      ||--|| mart_reconciliation : order_id
+    fct_settlement ||--o| mart_reconciliation : order_id
 ```
 - `fct_sales` — grain: one row per sold order (incremental), conformed from both channels.
 - `fct_settlement` — grain: one row per cash remittance (incremental).
@@ -107,7 +135,19 @@ the incremental time; the SQL delta itself is sub-second.)
 
 ## Run it
 
-### Full pipeline without the scheduler (fastest)
+### With Docker (no local Python/Java/Spark needed)
+The whole stack — PySpark, dbt, DuckDB — is baked into one image, so the
+pipeline runs the same way on any machine and in CI.
+```bash
+docker compose run --rm pipeline               # default 200k-order run
+SCALE=1000000 docker compose run --rm pipeline  # full 1M-order run
+```
+It runs generate → bronze → silver(Spark) → dbt snapshot/run/test → **validate**
+(the data-quality gate), and exits non-zero if any dbt test or DQ check fails.
+The Gold warehouse (DuckDB) and Silver Parquet persist in named volumes for
+inspection or Power BI.
+
+### With a local venv (fastest for iterating)
 ```bash
 make install          # create .venv + install the data stack
 make pipeline         # generate → bronze → silver → dbt (snapshot/run/test) → validate
@@ -120,6 +160,16 @@ make scd2-demo        # mutate the product master + re-snapshot → SCD Type 2 h
 make airflow          # standalone UI at http://localhost:8080
 # unpause + trigger the `commerce_lakehouse` DAG
 ```
+Airflow runs in its own venv (`.venv-airflow`) and shells out to the data-stack
+venv via `BashOperator` — the orchestrator/runtime **env isolation** a real
+deployment enforces.
+
+## Continuous integration
+Every push runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+- **lint** — `ruff` over `scripts/`, `spark/`, `benchmark/`, `dags/`.
+- **pipeline** — provisions Java 17 + Python 3.12, then runs the full medallion
+  pipeline at a small scale including **all 23 dbt tests** and the **DQ gate**.
+  A broken transform or a failing quality check turns the build red.
 
 ## Serving (Power BI)
 The Gold marts (`agg_channel_daily`, `mart_reconciliation`, dimensions) are the
@@ -139,8 +189,45 @@ commerce-lakehouse/
 ├── dbt/                       # Gold: staging → snapshot (SCD2) → marts (star, incremental, reconciliation)
 ├── dags/commerce_lakehouse_dag.py  # Airflow orchestration
 ├── benchmark/benchmark_incremental.py
+├── Dockerfile · docker-compose.yml # reproducible data-stack image + one-command run
+├── .github/workflows/ci.yml   # lint + full-pipeline CI (dbt tests + DQ gate)
+├── Makefile · ruff.toml        # task runner + lint config
 └── docs/                      # Power BI screenshots
 ```
+
+## Engineering decisions & challenges
+The interesting parts weren't the happy path — they were these calls:
+
+- **Conform *then* union, but only within a grain.** The two sales channels are
+  translated to one schema and `unionByName`-d; settlement is a *different grain*
+  (one row per cash remittance) so it is **kept separate** and reconciled at Gold,
+  not stacked onto sales. Unioning across grains would double-count revenue.
+- **Broadcast joins to survive skew.** One channel is ~78% of volume. Mapping
+  codes → canonical ids by shuffling the million-row fact would hot-spot on the
+  dominant key; instead the tiny reference tables (sku/status/FX) are
+  **broadcast**, so the fact never shuffles. The skew is deliberately built into
+  the generator as a talking point.
+- **Incremental facts via `delete+insert`, keyed on the natural id.** Appending
+  would duplicate on re-run/backfill. Delete-then-insert on `unique_key` makes
+  each load **idempotent** — re-running a day is a no-op, which is what makes
+  retries and backfill safe.
+- **SCD Type 2 through a dbt snapshot**, so product price/grade history is
+  versioned and "as-of" analysis stays correct — validated by a check that
+  exactly one `is_current` row exists per product.
+- **FX drift is real, so the DQ gate is tolerance-based, not exact.** Booked
+  revenue is valued on the *sale* date; cash settles on the *payout* date, so
+  same-currency (USD) orders reconcile to the cent while EUR orders show a small,
+  bounded gap. `validate.py` flags only settled orders whose gap exceeds **5% of
+  booked** — catching genuine breaks without failing on legitimate FX timing.
+- **A real orchestration bug worth remembering.** `BashOperator.env` is a
+  *templated* field with `template_ext=('.sh','.bash')`, so passing the full
+  environment broke the DAG when an outer shell exported `GIT_ASKPASS=…/askpass.sh`
+  — Airflow tried to load that value as a Jinja template (`TemplateNotFound`). Fix:
+  pass only the two vars the pipeline needs and set `append_env=True`
+  (see [`dags/commerce_lakehouse_dag.py`](dags/commerce_lakehouse_dag.py)).
+- **Coalesce + partition-by-date on write.** Silver `coalesce`s before writing to
+  avoid the small-files problem and partitions by `order_date` so downstream reads
+  prune to the days they need.
 
 ## Scaling to production
 The pattern is warehouse-portable. Swap targets without touching the DAG:
