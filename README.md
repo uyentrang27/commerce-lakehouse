@@ -26,7 +26,7 @@ flowchart LR
     SSS["Spark Structured Streaming<br/>checkpoint · exactly-once · micro-batch"]
   end
   subgraph BR["Bronze"]
-    BRZ["Batch: DuckDB CREATE OR REPLACE + _loaded_at<br/>Stream: append Parquet, partitioned"]
+    BRZ["Batch: overwrite Parquet + _loaded_at<br/>Stream: append Parquet, partitioned<br/>one Bronze zone, two speeds"]
   end
   subgraph SV["Silver — PySpark"]
     SIL["Conform + broadcast-join refs → USD<br/>unionByName sales · settlement kept separate<br/>partitioned Parquet"]
@@ -94,7 +94,7 @@ settles cash through an order-management system. Nothing lines up out of the box
 
 | Layer | Tool | What it does |
 |---|---|---|
-| **Bronze** | DuckDB | Idempotent `CREATE OR REPLACE` load of every raw file + `_loaded_at` audit — a queryable, replayable landing zone. |
+| **Bronze** | **Parquet** (DuckDB as writer) | Land every raw file as-is + `_loaded_at` audit into `data/bronze/`, an immutable replayable landing zone that Silver reads directly. Idempotent + fresh: `COPY … TO` overwrites, so re-running never duplicates. Same Parquet-on-the-lake shape as the streaming Bronze — one Bronze zone, two speeds. |
 | **Silver** | **PySpark** | **Conform** each source to one schema (rename, cast messy dates, map codes); **broadcast joins** against the tiny reference tables — sku map, status map, FX — so the million-row fact never shuffles; **FX to USD**; **`unionByName`** the two conformed sales channels; keep settlement separate (different grain); **cache** the reused frame; **`coalesce`** file-sizing; **partition by `order_date`** for pruning. |
 | **Gold** | **dbt** | **Star schema** (facts + conformed dims, surrogate keys); **SCD Type 2** snapshot (product price + grade history); **incremental** facts (`delete+insert`, only the delta); **`mart_reconciliation`** (booked vs settled); **aggregation table** for fast BI; tests + exposure + lineage. |
 | **Orchestration** | **Airflow** | Idempotent stages, retries with backoff, backfill-ready `@daily`, a **DQ gate** that fails the run before bad data reaches serving, and orchestrator/data-stack **env isolation**. |
@@ -275,7 +275,7 @@ serving DB.
 commerce-lakehouse/
 ├── scripts/
 │   ├── gen_multisource.py    # synthetic multi-source data (vectorised, skewed)
-│   ├── ingest_bronze.py      # raw → DuckDB bronze (idempotent)
+│   ├── ingest_bronze.py      # raw → Bronze Parquet + _loaded_at (idempotent)
 │   ├── validate.py           # data-quality gate on Gold
 │   └── run_pipeline.py       # run all stages without Airflow
 ├── spark/silver_transform.py # PySpark conform + union + settlement (broadcast, FX, partition)
@@ -330,9 +330,10 @@ The interesting parts weren't the happy path — they were these calls:
 - **Coalesce + partition-by-date on write.** Silver `coalesce`s before writing to
   avoid the small-files problem and partitions by `order_date` so downstream reads
   prune to the days they need.
-- **Streaming reuses Bronze, not a parallel universe.** The Kafka lane lands into
-  the same Bronze zone rather than a separate pipeline, so batch and stream
-  converge at Silver. Exactly-once comes from the Structured Streaming checkpoint
+- **Streaming reuses Bronze, not a parallel universe.** Both lanes land Parquet
+  on the same Bronze zone — batch overwrites per-entity files, the Kafka lane
+  appends partitioned events — rather than running separate pipelines, so batch
+  and stream converge at Silver. Exactly-once comes from the Structured Streaming checkpoint
   (offset tracking + file-sink manifest), not hand-rolled dedup.
 
 ## Scaling to production

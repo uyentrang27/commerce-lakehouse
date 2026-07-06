@@ -4,7 +4,7 @@
      (raw)      (DuckDB)   (Parquet)        (SCD2)          (star/incr) (tests)    (DQ gate)
 
 Engineering signals:
-- **Idempotent** at every stage (bronze CREATE OR REPLACE, silver overwrite,
+- **Idempotent** at every stage (bronze Parquet overwrite, silver overwrite,
   dbt incremental delete+insert, marts rebuilt) → safe to retry / backfill.
 - **Retries** with exponential backoff on transient failures.
 - **DQ gate** (`validate`) fails the run before bad data reaches serving.
@@ -71,7 +71,7 @@ with DAG(
 ) as dag:
 
     generate = bash("generate", f"{PY} scripts/gen_multisource.py --scale {SCALE} --out data")
-    bronze = bash("bronze", f"{PY} scripts/ingest_bronze.py --data-dir data --db-path {DUCKDB_PATH}")
+    bronze = bash("bronze", f"{PY} scripts/ingest_bronze.py --data-dir data")
     silver = bash("silver", f"{PY} spark/silver_transform.py --data-dir data")
     dbt_snapshot = bash("dbt_snapshot", f"{DBT} snapshot --profiles-dir {DBT_DIR} --project-dir {DBT_DIR}")
     dbt_run = bash("dbt_run", f"{DBT} run --profiles-dir {DBT_DIR} --project-dir {DBT_DIR}")

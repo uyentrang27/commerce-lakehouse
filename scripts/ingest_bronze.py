@@ -1,12 +1,14 @@
-"""Bronze layer: land the raw Parquet into the DuckDB warehouse under a `bronze`
-schema — a queryable, audited copy of exactly what was ingested.
+"""Bronze layer: land each raw Parquet as-is + ingestion lineage (`_loaded_at`)
+into the physical Bronze zone at data/bronze/ — an immutable, replayable landing
+zone on the lake that the Spark Silver job reads directly.
 
-- Idempotent: `CREATE OR REPLACE` rebuilds each bronze table from its raw file,
-  so re-running never duplicates.
-- Adds `_loaded_at` for ingestion lineage.
-
-The physical raw Parquet in data/raw/ is also read directly by the Spark Silver
-job — bronze here is the SQL-queryable registration of that landing zone.
+- Idempotent + fresh: `COPY ... TO` overwrites each Bronze file, so re-running
+  never duplicates and always reflects the current raw.
+- DuckDB is used in-memory purely as the transform/writer engine here; it does
+  not persist a database at this layer. The Gold layer (dbt) is what builds
+  dims/facts/marts into the DuckDB warehouse.
+- Batch Bronze (this) and streaming Bronze (data/bronze_stream/) are both
+  append/overwrite Parquet on the same lake — one Bronze zone, two speeds.
 """
 from __future__ import annotations
 
@@ -21,21 +23,24 @@ ENTITIES = [
 ]
 
 
-def ingest(raw_dir: str, db_path: str) -> None:
-    raw = pathlib.Path(raw_dir) / "raw"
-    con = duckdb.connect(db_path)
+def ingest(data_dir: str) -> None:
+    raw = pathlib.Path(data_dir) / "raw"
+    bronze = pathlib.Path(data_dir) / "bronze"
+    bronze.mkdir(parents=True, exist_ok=True)
+
+    con = duckdb.connect()  # in-memory: DuckDB is only the transform/writer here
     try:
-        con.execute("CREATE SCHEMA IF NOT EXISTS bronze")
         for entity in ENTITIES:
             src = raw / f"{entity}.parquet"
             if not src.exists():
                 print(f"[bronze] skip {entity} (no file)")
                 continue
+            dst = bronze / f"{entity}.parquet"
             con.execute(
-                f"CREATE OR REPLACE TABLE bronze.{entity} AS "
-                f"SELECT *, now() AS _loaded_at FROM read_parquet('{src}')"
+                f"COPY (SELECT *, now() AS _loaded_at FROM read_parquet('{src}')) "
+                f"TO '{dst}' (FORMAT parquet)"
             )
-            n = con.execute(f"SELECT count(*) FROM bronze.{entity}").fetchone()[0]
+            n = con.execute(f"SELECT count(*) FROM read_parquet('{dst}')").fetchone()[0]
             print(f"[bronze] {entity}: {n:,} rows")
     finally:
         con.close()
@@ -44,6 +49,5 @@ def ingest(raw_dir: str, db_path: str) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default="data")
-    ap.add_argument("--db-path", required=True)
     args = ap.parse_args()
-    ingest(args.data_dir, args.db_path)
+    ingest(args.data_dir)

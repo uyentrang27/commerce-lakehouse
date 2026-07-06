@@ -41,6 +41,7 @@ benchmark:
 
 scd2-demo:
 	$(PY) scripts/gen_multisource.py --mutate-dims --out data
+	$(PY) scripts/ingest_bronze.py --data-dir data
 	$(PY) spark/silver_transform.py --data-dir data
 	$(DBT) snapshot --profiles-dir dbt --project-dir dbt
 	$(DBT) run --select dim_product --profiles-dir dbt --project-dir dbt

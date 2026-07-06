@@ -45,8 +45,9 @@ def get_spark(app: str = "commerce-silver") -> SparkSession:
     )
 
 
-def read(spark: SparkSession, raw: str, name: str) -> DataFrame:
-    return spark.read.parquet(f"{raw}/raw/{name}.parquet")
+def read(spark: SparkSession, data_dir: str, name: str) -> DataFrame:
+    # Silver reads the Bronze zone (not raw) -> Bronze sits inside the flow.
+    return spark.read.parquet(f"{data_dir}/bronze/{name}.parquet")
 
 
 def conform_fx(fx: DataFrame) -> DataFrame:
@@ -146,21 +147,21 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default="data")
     args = ap.parse_args()
-    raw = out = args.data_dir
+    data_dir = out = args.data_dir
 
     spark = get_spark()
     spark.sparkContext.setLogLevel("WARN")
 
-    sku_map = read(spark, raw, "ref_sku_map")
-    status_map = read(spark, raw, "ref_status_map")
-    fx_conf = conform_fx(read(spark, raw, "ref_fx"))
+    sku_map = read(spark, data_dir, "ref_sku_map")
+    status_map = read(spark, data_dir, "ref_status_map")
+    fx_conf = conform_fx(read(spark, data_dir, "ref_fx"))
 
-    amz = conform_amazon(read(spark, raw, "sales_amazon"), sku_map, status_map, fx_conf)
-    bm = conform_backmarket(read(spark, raw, "sales_backmarket"), sku_map, status_map, fx_conf)
+    amz = conform_amazon(read(spark, data_dir, "sales_amazon"), sku_map, status_map, fx_conf)
+    bm = conform_backmarket(read(spark, data_dir, "sales_backmarket"), sku_map, status_map, fx_conf)
     silver_sales = amz.unionByName(bm).cache()          # counted + written -> cache
 
-    silver_settle = conform_settlement(read(spark, raw, "settlements_oms"), fx_conf)
-    silver_products = conform_products(read(spark, raw, "ref_product"))
+    silver_settle = conform_settlement(read(spark, data_dir, "settlements_oms"), fx_conf)
+    silver_products = conform_products(read(spark, data_dir, "ref_product"))
 
     print(f"[silver] sales={silver_sales.count():,}")    # single count off the cache
 
