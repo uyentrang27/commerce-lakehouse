@@ -45,3 +45,32 @@ jobs:
 
       - name: Run pipeline (generate -> bronze -> silver -> dbt snapshot/run/test -> validate)
         run: make pipeline SCALE=50000
+
+  # `pipeline` stops at Gold. The last mile — Gold -> Postgres -> Grafana, the
+  # part the README actually tells readers to run — has never been covered, so
+  # the badge has only ever spoken for the batch lane. Run it the way a reader
+  # would: no `make install`, no host `make pipeline`, so the runner starts from
+  # the same state as a fresh clone and whatever it finds is what they find too.
+  serving:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the pipeline image
+        run: docker compose build
+
+      - name: Run the pipeline (warehouse lands in the named volume)
+        run: SCALE=50000 docker compose run --rm pipeline
+
+      - name: Publish the Gold marts to the serving DB
+        run: make serving-demo
+
+      # Grafana exits on a malformed provisioning file, so a reachable /api/health
+      # is also proof the datasource and dashboard YAML still parse.
+      - name: Check Grafana came up with its provisioning intact
+        run: curl -fsS --retry 10 --retry-delay 3 --retry-all-errors http://localhost:3000/api/health
+
+      - name: Stop the serving stack
+        if: always()
+        run: make serving-down

@@ -238,6 +238,10 @@ Every push runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 - **pipeline** — provisions Java 17 + Python 3.12, then runs the full medallion
   pipeline at a small scale including **all 23 dbt tests** and the **DQ gate**.
   A broken transform or a failing quality check turns the build red.
+- **serving** — the last mile: builds the image, runs the pipeline over Docker,
+  then publishes the Gold marts to Postgres and checks Grafana came up with its
+  provisioning intact. Runs on a clean runner — no venv, no host warehouse —
+  the same starting state as a fresh clone.
 
 ## Serving (Postgres + Grafana)
 The Gold marts are published to a **Postgres serving DB**, which **Grafana** reads
