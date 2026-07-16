@@ -1,8 +1,9 @@
 name: CI
 
-# Lint the data stack, then run the whole medallion pipeline end to end on a
-# small synthetic scale — including dbt tests and the data-quality gate — so a
-# broken transform or a failing DQ check turns the build red.
+# Lint the data stack, run the whole medallion pipeline on a small synthetic
+# scale (dbt tests + the data-quality gate), then publish the Gold marts to the
+# serving layer over Docker — so a broken transform, a failing DQ check, or a
+# serving lane that no longer reaches Postgres all turn the build red.
 on:
   push:
     branches: [main]
@@ -45,3 +46,42 @@ jobs:
 
       - name: Run pipeline (generate -> bronze -> silver -> dbt snapshot/run/test -> validate)
         run: make pipeline SCALE=50000
+
+  # The pipeline job stops at Gold. This one covers the last mile — Gold ->
+  # Postgres -> Grafana — and deliberately takes the Docker route the README
+  # documents, not the host venv. The loader is only interesting when it has to
+  # read the warehouse out of a named volume and reach Postgres by service name;
+  # running it on the host would pass for the wrong reason, because `make
+  # pipeline` leaves a warehouse file sitting there for it to find.
+  serving:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # No layer cache: the image is rebuilt from scratch each run (~5 min), which
+      # also keeps requirements.txt honest — a missing pin fails here, not on a
+      # laptop that happens to have the package already.
+      - name: Build the pipeline image
+        run: docker compose build
+
+      - name: Run the pipeline (warehouse lands in the named volume)
+        run: SCALE=50000 docker compose run --rm pipeline
+
+      - name: Start Postgres + Grafana
+        run: make serving-up
+
+      - name: Publish Gold marts from the warehouse volume
+        run: make serving-load-docker
+
+      - name: Assert the served marts match Gold
+        run: make serving-verify-docker
+
+      # Grafana exits on a malformed provisioning file, so a reachable /api/health
+      # is also proof the datasource and dashboard YAML still parse.
+      - name: Check Grafana came up with its provisioning intact
+        run: curl -fsS --retry 10 --retry-delay 3 --retry-all-errors http://localhost:3000/api/health
+
+      - name: Stop the serving stack
+        if: always()
+        run: make serving-down

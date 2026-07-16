@@ -212,8 +212,13 @@ SCALE=1000000 docker compose run --rm pipeline  # full 1M-order run
 ```
 It runs generate → bronze → silver(Spark) → dbt snapshot/run/test → **validate**
 (the data-quality gate), and exits non-zero if any dbt test or DQ check fails.
-The Gold warehouse (DuckDB) and Silver Parquet persist in named volumes for
-inspection or the serving layer.
+
+The Gold warehouse (DuckDB) and Silver Parquet persist in **named volumes**, so
+they survive the container. Docker manages those volumes outside the project
+tree (under `/var/lib/docker/volumes/`, root-owned), so tools running on the
+host cannot read them as `warehouse/lakehouse.duckdb` — to publish these marts
+to the serving layer, use `make serving-demo-docker`, which runs the loader
+inside the same image (see [Serving](#serving-postgres--grafana)).
 
 ### With a local venv (fastest for iterating)
 ```bash
@@ -238,6 +243,10 @@ Every push runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 - **pipeline** — provisions Java 17 + Python 3.12, then runs the full medallion
   pipeline at a small scale including **all 23 dbt tests** and the **DQ gate**.
   A broken transform or a failing quality check turns the build red.
+- **serving** — the last mile, over Docker: builds the image, runs the pipeline
+  into the warehouse volume, publishes the marts to Postgres, and asserts the
+  served row counts still match Gold. This job installs no venv and runs no host
+  pipeline, so it only passes if the containerised route genuinely works.
 
 ## Serving (Postgres + Grafana)
 The Gold marts are published to a **Postgres serving DB**, which **Grafana** reads
@@ -245,11 +254,28 @@ natively — the datasource and dashboard are **provisioned as code** under
 `serving/grafana/`, so the serving layer stands up reproducibly on Linux (no
 Power BI / Windows needed).
 
+Pick the target that matches **where you ran the pipeline**, because that decides
+where the warehouse lives:
+
 ```bash
-make serving-demo   # Postgres + Grafana (Docker) + publish Gold marts
+# (a) pipeline was run with Docker → warehouse is in the named volume
+docker compose run --rm pipeline
+make serving-demo-docker   # Postgres + Grafana, loader runs inside the image
+
+# (b) pipeline was run with the local venv → warehouse is a file on the host
+make install && make pipeline
+make serving-demo          # Postgres + Grafana, loader runs on the host
+
+# either way:
 # open http://localhost:3000  (anonymous viewer) → "Commerce Lakehouse — Serving"
 make serving-down
 ```
+
+The two targets share one loader (`serving/load_to_postgres.py`); only the
+warehouse location and the Postgres host differ, and both are parameterised via
+`DUCKDB_PATH` / `PG_DSN`. Inside the container Postgres resolves as `postgres`
+(service name) rather than `localhost`, since the pipeline and serving compose
+files share a compose project and therefore a network.
 
 ![Grafana serving dashboard](docs/serving_grafana.png)
 
@@ -286,13 +312,14 @@ commerce-lakehouse/
 │   └── stream_to_serving.py   #   windowed agg → Postgres → real-time Grafana
 ├── serving/                   # Postgres serving DB + Grafana (provisioned as code)
 │   ├── load_to_postgres.py    #   publish Gold marts DuckDB → Postgres
+│   ├── verify_serving.py      #   assert served marts still match Gold (CI gate)
 │   └── grafana/               #   datasource + batch & real-time dashboards
 ├── dags/commerce_lakehouse_dag.py  # Airflow orchestration
 ├── benchmark/benchmark_incremental.py
 ├── Dockerfile · docker-compose.yml # reproducible data-stack image + one-command run
 ├── docker-compose.streaming.yml    # single-node Kafka (KRaft) for the streaming lane
 ├── docker-compose.serving.yml      # Postgres + Grafana for the serving lane
-├── .github/workflows/ci.yml   # lint + full-pipeline CI (dbt tests + DQ gate)
+├── .github/workflows/ci.yml   # lint + full-pipeline CI (dbt tests + DQ gate) + serving lane
 ├── Makefile · ruff.toml        # task runner + lint config
 └── docs/                      # serving dashboard screenshot
 ```

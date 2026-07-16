@@ -11,9 +11,14 @@ RATE ?= 200
 STREAM_COMPOSE := docker compose -f docker-compose.streaming.yml
 SERVING_COMPOSE := docker compose -f docker-compose.serving.yml
 
+# Postgres as seen from inside the pipeline image: service name, not localhost.
+PG_DSN_DOCKER := host=postgres port=5432 dbname=serving user=grafana password=grafana
+
 .PHONY: help install pipeline benchmark scd2-demo airflow clean \
         stream-up stream-produce stream-consume stream-down stream-demo \
         serving-up serving-load serving-down serving-demo \
+        serving-load-docker serving-demo-docker \
+        serving-verify serving-verify-docker \
         stream-serving realtime-demo
 
 help:
@@ -83,11 +88,33 @@ serving-up:
 serving-load:
 	$(PY) serving/load_to_postgres.py
 
+# Same loader, but run inside the pipeline image. Use this when the pipeline ran
+# via `docker compose run --rm pipeline`: the warehouse then lives in the named
+# volume, which the host cannot read. The container mounts that volume, and
+# reaches Postgres by service name because both compose files sit in this
+# directory and therefore share one compose project (and one network).
+serving-load-docker:
+	docker compose run --rm -e PG_DSN="$(PG_DSN_DOCKER)" \
+	  pipeline python serving/load_to_postgres.py
+
+# Assert the published marts match Gold. The loader prints row counts but always
+# exits 0, so a publish that lands zero rows still looks fine in the log; this is
+# what turns the serving lane red instead.
+serving-verify:
+	$(PY) serving/verify_serving.py
+
+serving-verify-docker:
+	docker compose run --rm -e PG_DSN="$(PG_DSN_DOCKER)" \
+	  pipeline python serving/verify_serving.py
+
 serving-down:
 	$(SERVING_COMPOSE) down -v
 
 serving-demo: serving-up serving-load
 	@echo "Serving marts published. Open http://localhost:3000 (anonymous viewer) -> 'Commerce Lakehouse — Serving'."
+
+serving-demo-docker: serving-up serving-load-docker
+	@echo "Serving marts published from the Docker warehouse volume. Open http://localhost:3000 -> 'Commerce Lakehouse — Serving'."
 
 stream-serving:
 	$(PY) streaming/stream_to_serving.py --mode batch
